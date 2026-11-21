@@ -104,6 +104,7 @@ ol.board li:nth-child(odd){background:rgba(255,79,163,.08)}
 ol.board li::before{content:counter(rank) "."; font-weight:800; color:#8a5a7a}
 ol.board li span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
 ol.board li b{font-family:var(--display); font-weight:400; font-size:16px; font-variant-numeric:tabular-nums}
+.board-note{font-size:12px; color:#8a5a7a; margin:6px 0 0; text-align:center}
 ol.board li.me{background:#ffe08a; box-shadow:inset 0 0 0 2px var(--gold)}
 #nameForm{margin:0 0 14px; text-align:left}
 #nameForm label{display:block; font-weight:800; font-size:14px; margin-bottom:6px}
@@ -134,7 +135,7 @@ button.go.small{font-size:16px; padding:8px 14px; box-shadow:0 4px 0 #138067}
         <p>Zieh das Glas nach links oder rechts und lass los, um es über die Theke zu schieben. Zwei gleiche Drinks verschmelzen zum nächstgrößeren.</p>
         <p><b>Achtung:</b> Ragt ein Drink über die gestrichelte Linie, ist Schluss.</p>
         <div class="board-wrap" id="startBoardWrap" hidden>
-          <h3>Bestenliste</h3>
+          <h3 id="boardStartTitle">Bestenliste</h3>
           <ol class="board" id="boardStart"></ol>
         </div>
         <button class="go" id="startBtn">Los geht's</button>
@@ -157,8 +158,9 @@ button.go.small{font-size:16px; padding:8px 14px; box-shadow:0 4px 0 #138067}
           </div>
         </form>
         <div class="board-wrap" id="overBoardWrap" hidden>
-          <h3>Bestenliste</h3>
+          <h3 id="boardOverTitle">Bestenliste</h3>
           <ol class="board" id="boardOver"></ol>
+          <p class="board-note" id="boardNote" hidden></p>
         </div>
         <button class="go" id="againBtn">Nochmal</button>
       </div>
@@ -589,23 +591,48 @@ try { JSON.parse(localStorage.getItem('schnitzi_seen') || '[0]').forEach(n => di
 try { soundOn = localStorage.getItem('schnitzi_sound') !== '0'; } catch (e) {}
 
 // ---------- Bestenliste ----------
-let board = [], lastName = '', pendingScore = 0, pendingBest = '';
+// Online: gemeinsame Liste in Supabase (nur Lesen + Hinzufügen erlaubt).
+// Lokal: Ersatz, wenn keine Verbindung besteht (z. B. im Claude-Artifact).
+const SB_URL = 'https://ebhtxhjyzdhpmumcdnhs.supabase.co';
+const SB_KEY = 'sb_publishable_1O5YzhrAcz8TDItiZvhYjg_mQIRjJuh';
+let board = [], online = null, lastName = '', pendingScore = 0, pendingBest = '', markId = null;
 try { const b = JSON.parse(localStorage.getItem('schnitzi_board') || '[]'); if (Array.isArray(b)) board = b.filter(e => e && typeof e.score === 'number').slice(0, 10); } catch (e) {}
 try { lastName = localStorage.getItem('schnitzi_name') || ''; } catch (e) {}
 if (board.length) record = Math.max(record, board[0].score);
-// Browser bitten, die gespeicherten Daten nicht automatisch zu löschen
-try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => {}); } catch (e) {}
-const qualifies = sc => sc > 0 && (board.length < 10 || sc > board[board.length - 1].score);
-function renderBoard(list, wrap, mark) {
+
+function sbFetch(path, opts = {}) {
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 7000);
+  return fetch(SB_URL + '/rest/v1/' + path, {
+    ...opts, signal: ctrl.signal,
+    headers: { apikey: SB_KEY, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  }).then(r => { clearTimeout(t); if (!r.ok) throw new Error('HTTP ' + r.status); return r.status === 204 ? null : r.json(); })
+    .catch(e => { clearTimeout(t); throw e; });
+}
+function loadOnline() {
+  return sbFetch('scores?select=id,name,score,best&order=score.desc,created_at.asc&limit=10')
+    .then(rows => { online = Array.isArray(rows) ? rows : []; return online; })
+    .catch(() => { online = null; return null; });
+}
+const activeList = () => online || board;
+const qualifies = sc => { const l = activeList(); return sc > 0 && (l.length < 10 || sc > l[l.length - 1].score); };
+function renderBoard(list, wrap, title) {
+  const l = activeList();
   list.textContent = '';
-  board.forEach(e => {
-    const li = document.createElement('li'); if (e === mark) li.className = 'me';
+  title.textContent = online ? 'Online-Bestenliste' : 'Bestenliste (dieses Gerät)';
+  l.forEach(e => {
+    const li = document.createElement('li');
+    if (markId !== null && (e.id === markId || e === markId)) li.className = 'me';
     const n = document.createElement('span'); n.textContent = e.name;
-    const sc = document.createElement('b'); sc.textContent = e.score.toLocaleString('de-DE');
+    const sc = document.createElement('b'); sc.textContent = Number(e.score).toLocaleString('de-DE');
     li.title = e.best ? 'Größter Drink: ' + e.best : '';
     li.append(n, sc); list.appendChild(li);
   });
-  wrap.hidden = board.length === 0;
+  wrap.hidden = l.length === 0 && !online;
+  if (online && l.length === 0) { const li = document.createElement('li'); li.textContent = 'Noch keine Einträge. Sei die erste Person!'; list.appendChild(li); }
+}
+function renderBoards() {
+  renderBoard($('boardStart'), $('startBoardWrap'), $('boardStartTitle'));
+  renderBoard($('boardOver'), $('overBoardWrap'), $('boardOverTitle'));
 }
 function addToBoard(name) {
   const entry = { name: name.trim().slice(0, 14) || 'Gast', score: pendingScore, best: pendingBest, d: Date.now() };
@@ -613,6 +640,12 @@ function addToBoard(name) {
   try { localStorage.setItem('schnitzi_board', JSON.stringify(board)); localStorage.setItem('schnitzi_name', entry.name); } catch (e) {}
   lastName = entry.name;
   return entry;
+}
+function submitOnline(entry) {
+  return sbFetch('scores?select=id', {
+    method: 'POST', headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({ name: entry.name, score: entry.score, best: entry.best }),
+  }).then(rows => (rows && rows[0] ? rows[0].id : null));
 }
 
 // Leiter
@@ -699,11 +732,16 @@ function gameOver() {
   const best = bodies.reduce((m, b) => Math.max(m, b.level), 0);
   $('bestDrink').textContent = 'Größter Drink auf der Theke: ' + DRINKS[best].name;
   pendingScore = score; pendingBest = DRINKS[best].name;
-  const canEnter = qualifies(score);
-  $('nameForm').hidden = !canEnter;
+  markId = null; $('boardNote').hidden = true;
   $('nameInput').value = lastName;
-  renderBoard($('boardOver'), $('overBoardWrap'));
-  setTimeout(() => { $('overOv').hidden = false; (canEnter ? $('nameInput') : $('againBtn')).focus({ preventScroll: true }); }, 700);
+  const shown = new Promise(r => setTimeout(r, 700));
+  Promise.all([loadOnline(), shown]).then(() => {
+    const canEnter = qualifies(score);
+    $('nameForm').hidden = !canEnter;
+    renderBoards();
+    $('overOv').hidden = false;
+    (canEnter ? $('nameInput') : $('againBtn')).focus({ preventScroll: true });
+  });
   updateScore();
 }
 
@@ -936,13 +974,19 @@ $('againBtn').addEventListener('click', newGame);
 $('nameForm').addEventListener('submit', e => {
   e.preventDefault();
   if ($('nameForm').hidden) return;
+  const btn = $('nameForm').querySelector('button'); if (btn.disabled) return;
+  btn.disabled = true;
   const entry = addToBoard($('nameInput').value);
-  $('nameForm').hidden = true;
-  renderBoard($('boardOver'), $('overBoardWrap'), entry);
-  renderBoard($('boardStart'), $('startBoardWrap'));
-  $('againBtn').focus({ preventScroll: true });
+  const done = () => { btn.disabled = false; $('nameForm').hidden = true; renderBoards(); $('againBtn').focus({ preventScroll: true }); };
+  if (online) {
+    submitOnline(entry)
+      .then(id => loadOnline().then(() => { markId = id; }))
+      .catch(() => { online = null; markId = entry; $('boardNote').textContent = 'Online-Liste gerade nicht erreichbar. Dein Ergebnis ist auf diesem Gerät gespeichert.'; $('boardNote').hidden = false; })
+      .then(done);
+  } else { markId = entry; done(); }
 });
-renderBoard($('boardStart'), $('startBoardWrap'));
+renderBoards();
+loadOnline().then(renderBoards);
 
 // ---------- Schleife ----------
 let last = performance.now();
