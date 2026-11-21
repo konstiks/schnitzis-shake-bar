@@ -95,6 +95,22 @@ button.go:focus-visible, .icon-btn:focus-visible{outline:3px solid var(--gold); 
   position:absolute; top:4px; right:6px; width:34px; height:34px; border-radius:11px; border:2px solid var(--plaque-edge);
   background:var(--plaque); color:#fff; font:800 15px var(--body); cursor:pointer; display:flex; align-items:center; justify-content:center;
 }
+.card{max-height:100%; overflow-y:auto; box-sizing:border-box}
+.board-wrap{margin:0 0 14px; text-align:left}
+.board-wrap h3{font-family:var(--display); font-weight:400; font-size:18px; color:#e0247a; margin:0 0 6px; text-align:center}
+ol.board{margin:0; padding:0; list-style:none; counter-reset:rank; font-size:14px}
+ol.board li{counter-increment:rank; display:grid; grid-template-columns:26px 1fr auto; gap:6px; align-items:baseline; padding:3px 8px; border-radius:8px}
+ol.board li:nth-child(odd){background:rgba(255,79,163,.08)}
+ol.board li::before{content:counter(rank) "."; font-weight:800; color:#8a5a7a}
+ol.board li span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
+ol.board li b{font-family:var(--display); font-weight:400; font-size:16px; font-variant-numeric:tabular-nums}
+ol.board li.me{background:#ffe08a; box-shadow:inset 0 0 0 2px var(--gold)}
+#nameForm{margin:0 0 14px; text-align:left}
+#nameForm label{display:block; font-weight:800; font-size:14px; margin-bottom:6px}
+.name-row{display:flex; gap:8px}
+#nameInput{flex:1; min-width:0; font:800 16px var(--body); color:var(--ink); background:#fff; border:2px solid #e9a3c6; border-radius:12px; padding:8px 10px; user-select:text; -webkit-user-select:text}
+#nameInput:focus-visible{outline:3px solid var(--gold); outline-offset:1px}
+button.go.small{font-size:16px; padding:8px 14px; box-shadow:0 4px 0 #138067}
 @media (prefers-reduced-motion: reduce){ .sign{animation:none} .ladder img.pop{animation:none} }
 </style>
 
@@ -117,6 +133,10 @@ button.go:focus-visible, .icon-btn:focus-visible{outline:3px solid var(--gold); 
         <h2>Willkommen!</h2>
         <p>Zieh das Glas nach links oder rechts und lass los, um es über die Theke zu schieben. Zwei gleiche Drinks verschmelzen zum nächstgrößeren.</p>
         <p><b>Achtung:</b> Ragt ein Drink über die gestrichelte Linie, ist Schluss.</p>
+        <div class="board-wrap" id="startBoardWrap" hidden>
+          <h3>Bestenliste</h3>
+          <ol class="board" id="boardStart"></ol>
+        </div>
         <button class="go" id="startBtn">Los geht's</button>
       </div>
     </div>
@@ -129,6 +149,17 @@ button.go:focus-visible, .icon-btn:focus-visible{outline:3px solid var(--gold); 
           <div>Rekord<b id="finalRecord">0</b></div>
         </div>
         <p id="bestDrink"></p>
+        <form id="nameForm" hidden>
+          <label for="nameInput">Du bist in der Bestenliste! Dein Name:</label>
+          <div class="name-row">
+            <input id="nameInput" maxlength="14" autocomplete="nickname" enterkeyhint="done" placeholder="Name">
+            <button class="go small" type="submit">Eintragen</button>
+          </div>
+        </form>
+        <div class="board-wrap" id="overBoardWrap" hidden>
+          <h3>Bestenliste</h3>
+          <ol class="board" id="boardOver"></ol>
+        </div>
         <button class="go" id="againBtn">Nochmal</button>
       </div>
     </div>
@@ -150,6 +181,7 @@ const HELD_Y = 624;
 const LAUNCH_V = 1000;
 const FRICTION = 1.75;
 const SPR = 3; // Sprite-Auflösung pro Einheit*Radius
+const HIT = 0.82; // Kollisionsradius relativ zur Grafik: Gläser dürfen enger stehen
 
 const DRINKS = [
   { name: 'Kirsch-Shot',        r: 21, liq: ['#ff6b7f', '#c4122f'] },
@@ -549,11 +581,39 @@ let bodies = [], particles = [], floaters = [];
 let held = null, nextLevel = 0, score = 0, record = 0, maxLevel = 0;
 let state = 'start', aimX = W / 2, aiming = false, spawnTimer = 0, dangerT = 0, comboT = 0, combo = 0, shake = 0, time = 0;
 let discovered = new Set([0]);
+let recordAtStart = 0;
 let soundOn = true;
 
 try { record = parseInt(localStorage.getItem('schnitzi_record') || '0', 10) || 0; } catch (e) {}
 try { JSON.parse(localStorage.getItem('schnitzi_seen') || '[0]').forEach(n => discovered.add(n)); } catch (e) {}
 try { soundOn = localStorage.getItem('schnitzi_sound') !== '0'; } catch (e) {}
+
+// ---------- Bestenliste ----------
+let board = [], lastName = '', pendingScore = 0, pendingBest = '';
+try { const b = JSON.parse(localStorage.getItem('schnitzi_board') || '[]'); if (Array.isArray(b)) board = b.filter(e => e && typeof e.score === 'number').slice(0, 10); } catch (e) {}
+try { lastName = localStorage.getItem('schnitzi_name') || ''; } catch (e) {}
+if (board.length) record = Math.max(record, board[0].score);
+// Browser bitten, die gespeicherten Daten nicht automatisch zu löschen
+try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => {}); } catch (e) {}
+const qualifies = sc => sc > 0 && (board.length < 10 || sc > board[board.length - 1].score);
+function renderBoard(list, wrap, mark) {
+  list.textContent = '';
+  board.forEach(e => {
+    const li = document.createElement('li'); if (e === mark) li.className = 'me';
+    const n = document.createElement('span'); n.textContent = e.name;
+    const sc = document.createElement('b'); sc.textContent = e.score.toLocaleString('de-DE');
+    li.title = e.best ? 'Größter Drink: ' + e.best : '';
+    li.append(n, sc); list.appendChild(li);
+  });
+  wrap.hidden = board.length === 0;
+}
+function addToBoard(name) {
+  const entry = { name: name.trim().slice(0, 14) || 'Gast', score: pendingScore, best: pendingBest, d: Date.now() };
+  board.push(entry); board.sort((a, b) => b.score - a.score); board = board.slice(0, 10);
+  try { localStorage.setItem('schnitzi_board', JSON.stringify(board)); localStorage.setItem('schnitzi_name', entry.name); } catch (e) {}
+  lastName = entry.name;
+  return entry;
+}
 
 // Leiter
 const ladder = $('ladder');
@@ -597,7 +657,7 @@ function rollLevel() {
   return 0;
 }
 function makeBody(level, x, y) {
-  return { level, x, y, vx: 0, vy: 0, r: DRINKS[level].r, born: time, over: 0, fresh: false, dead: false, wob: 0 };
+  return { level, x, y, vx: 0, vy: 0, r: DRINKS[level].r, h: DRINKS[level].r * HIT, born: time, over: 0, fresh: false, shot: false, dead: false, wob: 0 };
 }
 function spawnHeld() {
   held = makeBody(nextLevel, clampX(aimX, DRINKS[nextLevel].r), HELD_Y);
@@ -608,33 +668,42 @@ function spawnHeld() {
 function clampX(x, r) { return Math.max(TABLE.l + r, Math.min(TABLE.r - r, x)); }
 function newGame() {
   bodies = []; particles = []; floaters = [];
-  score = 0; maxLevel = 2; combo = 0; dangerT = 0;
+  score = 0; maxLevel = 2; combo = 0; dangerT = 0; recordAtStart = record;
   nextLevel = rollLevel(); spawnHeld();
   updateScore(); state = 'play';
   $('startOv').hidden = true; $('overOv').hidden = true;
 }
+function saveRecord() { try { localStorage.setItem('schnitzi_record', String(record)); } catch (e) {} }
 function updateScore() {
+  // Rekord sofort sichern, nicht erst am Spielende (falls der Tab vorher geschlossen wird)
+  if (score > record) { record = score; saveRecord(); }
   $('score').textContent = score.toLocaleString('de-DE');
   $('record').textContent = Math.max(record, score).toLocaleString('de-DE');
 }
 function shoot() {
   if (state !== 'play' || !held) return;
   const b = held; held = null;
-  b.vy = -LAUNCH_V; b.vx = 0; b.fresh = true;
+  b.vy = -LAUNCH_V; b.vx = 0; b.fresh = true; b.shot = true;
   bodies.push(b);
   spawnTimer = 0.45;
   sfx.shoot();
 }
 function gameOver() {
   state = 'over'; sfx.over();
-  const isNew = score > record;
-  if (isNew) { record = score; try { localStorage.setItem('schnitzi_record', String(record)); } catch (e) {} }
+  const isNew = score > recordAtStart;
+  if (score > record) record = score;
+  saveRecord();
   $('finalScore').textContent = score.toLocaleString('de-DE');
   $('finalRecord').textContent = record.toLocaleString('de-DE');
   $('newRec').hidden = !isNew;
   const best = bodies.reduce((m, b) => Math.max(m, b.level), 0);
   $('bestDrink').textContent = 'Größter Drink auf der Theke: ' + DRINKS[best].name;
-  setTimeout(() => { $('overOv').hidden = false; $('againBtn').focus(); }, 700);
+  pendingScore = score; pendingBest = DRINKS[best].name;
+  const canEnter = qualifies(score);
+  $('nameForm').hidden = !canEnter;
+  $('nameInput').value = lastName;
+  renderBoard($('boardOver'), $('overBoardWrap'));
+  setTimeout(() => { $('overOv').hidden = false; (canEnter ? $('nameInput') : $('againBtn')).focus({ preventScroll: true }); }, 700);
   updateScore();
 }
 
@@ -694,7 +763,7 @@ function physics(dt) {
       const a = bodies[i]; if (a.dead) continue;
       for (let j = i + 1; j < bodies.length; j++) {
         const b = bodies[j]; if (b.dead) continue;
-        const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r, d2 = dx * dx + dy * dy;
+        const dx = b.x - a.x, dy = b.y - a.y, rs = a.h + b.h, d2 = dx * dx + dy * dy;
         if (d2 >= rs * rs) continue;
         if (a.level === b.level) { merge(a, b); break; }
         const d = Math.sqrt(d2) || 0.01, nx = dx / d, ny = dy / d, ov = rs - d;
@@ -703,9 +772,20 @@ function physics(dt) {
         b.x += nx * ov * (ma / mt); b.y += ny * ov * (ma / mt);
         const vrel = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
         if (vrel < 0) {
-          const jimp = -(1 + 0.35) * vrel / (1 / ma + 1 / mb);
-          a.vx -= jimp / ma * nx; a.vy -= jimp / ma * ny;
-          b.vx += jimp / mb * nx; b.vy += jimp / mb * ny;
+          // Frontaltreffer des geschobenen Glases: mehr Wucht für das getroffene Glas
+          let e = 0.35, boostA = 1, boostB = 1;
+          const s = a.shot ? a : (b.shot ? b : null);
+          if (s) {
+            const sp = Math.hypot(s.vx, s.vy) || 1;
+            const head = Math.max(0, (s === a ? 1 : -1) * (s.vx * nx + s.vy * ny) / sp);
+            const k = head * head * head;
+            e = 0.35 + 0.55 * k;
+            if (s === a) boostB = 1 + 0.6 * k; else boostA = 1 + 0.6 * k;
+            s.shot = false;
+          }
+          const jimp = -(1 + e) * vrel / (1 / ma + 1 / mb);
+          a.vx -= jimp / ma * nx * boostA; a.vy -= jimp / ma * ny * boostA;
+          b.vx += jimp / mb * nx * boostB; b.vy += jimp / mb * ny * boostB;
           if (-vrel > 120) { sfx.clink(-vrel * 10); a.wob = b.wob = Math.min(1, -vrel / 600); }
         }
       }
@@ -853,6 +933,16 @@ window.addEventListener('keydown', e => {
 });
 $('startBtn').addEventListener('click', newGame);
 $('againBtn').addEventListener('click', newGame);
+$('nameForm').addEventListener('submit', e => {
+  e.preventDefault();
+  if ($('nameForm').hidden) return;
+  const entry = addToBoard($('nameInput').value);
+  $('nameForm').hidden = true;
+  renderBoard($('boardOver'), $('overBoardWrap'), entry);
+  renderBoard($('boardStart'), $('startBoardWrap'));
+  $('againBtn').focus({ preventScroll: true });
+});
+renderBoard($('boardStart'), $('startBoardWrap'));
 
 // ---------- Schleife ----------
 let last = performance.now();
