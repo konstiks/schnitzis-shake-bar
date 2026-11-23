@@ -112,7 +112,32 @@ ol.board li.me{background:#ffe08a; box-shadow:inset 0 0 0 2px var(--gold)}
 #nameInput{flex:1; min-width:0; font:800 16px var(--body); color:var(--ink); background:#fff; border:2px solid #e9a3c6; border-radius:12px; padding:8px 10px; user-select:text; -webkit-user-select:text}
 #nameInput:focus-visible{outline:3px solid var(--gold); outline-offset:1px}
 button.go.small{font-size:16px; padding:8px 14px; box-shadow:0 4px 0 #138067}
-@media (prefers-reduced-motion: reduce){ .sign{animation:none} .ladder img.pop{animation:none} }
+.icon-btn.help{right:auto; left:6px; font-family:var(--display); font-weight:400; font-size:18px}
+/* Anleitung */
+#tutOv{padding:10px}
+.tut{max-width:320px; width:100%; padding:14px 16px 12px; display:flex; flex-direction:column}
+.tut ul{overflow-y:auto; min-height:0}
+.tut .step-no{font:800 11px var(--body); letter-spacing:.12em; text-transform:uppercase; color:#8a5a7a; margin-bottom:2px}
+.tut h2{font-size:23px; margin-bottom:6px}
+.tut .pic{display:flex; align-items:center; justify-content:center; gap:6px; min-height:58px; margin:0 0 10px;
+  background:linear-gradient(180deg,#d8f7ee,#bff0e2); border-radius:16px; padding:8px; font-family:var(--display); font-size:26px; color:#e0247a}
+.tut .pic img{width:46px; height:46px; object-fit:contain}
+.tut .pic img.sm{width:34px; height:34px}
+.tut .pic .hand{font-size:30px; animation:slide 1.8s ease-in-out infinite}
+.tut .pic .line{flex:1; max-width:180px; border-top:4px dashed #ff4f6e; position:relative}
+.tut .pic .line img{position:absolute; left:50%; top:-30px; transform:translateX(-50%)}
+.tut .pic .tag{font-size:18px; background:var(--neon); color:#fff; border-radius:10px; padding:2px 8px}
+@keyframes slide{0%,100%{transform:translateX(-26px)}50%{transform:translateX(26px)}}
+.tut ul{margin:0 0 10px; padding:0 0 0 18px; text-align:left; font-size:14.5px; line-height:1.4}
+.tut ul li{margin-bottom:4px}
+.tut .dots{display:flex; justify-content:center; gap:7px; margin:0 0 8px; flex:none}
+.tut .dots i{width:9px; height:9px; border-radius:50%; background:#e9c3d6}
+.tut .dots i.on{background:var(--neon)}
+.tut .nav{flex:none; display:flex; align-items:center; justify-content:space-between; gap:10px}
+.tut .nav .go{padding:10px 22px; font-size:20px; min-height:48px}
+button.link{background:none; border:none; font:800 14px var(--body); color:#8a5a7a; text-decoration:underline; cursor:pointer; padding:12px 6px; min-height:44px}
+button.link:focus-visible{outline:3px solid var(--gold); outline-offset:2px; border-radius:8px}
+@media (prefers-reduced-motion: reduce){ .sign{animation:none} .ladder img.pop{animation:none} .tut .pic .hand{animation:none} }
 </style>
 
 <div class="app">
@@ -129,6 +154,7 @@ button.go.small{font-size:16px; padding:8px 14px; box-shadow:0 4px 0 #138067}
    <div class="board" id="board">
     <canvas id="game" aria-label="Spieltisch: ziehen zum Zielen, loslassen zum Schieben"></canvas>
     <button class="icon-btn" id="soundBtn" aria-label="Ton an/aus" title="Ton an/aus">♪</button>
+    <button class="icon-btn help" id="helpBtn" aria-label="Anleitung" title="Anleitung">?</button>
     <div class="overlay" id="startOv">
       <div class="card">
         <h2>Willkommen!</h2>
@@ -139,6 +165,19 @@ button.go.small{font-size:16px; padding:8px 14px; box-shadow:0 4px 0 #138067}
           <ol class="board" id="boardStart"></ol>
         </div>
         <button class="go" id="startBtn">Los geht's</button>
+      </div>
+    </div>
+    <div class="overlay" id="tutOv" hidden role="dialog" aria-modal="true" aria-labelledby="tutTitle">
+      <div class="card tut">
+        <div class="step-no" id="tutNo"></div>
+        <h2 id="tutTitle"></h2>
+        <div class="pic" id="tutPic" aria-hidden="true"></div>
+        <ul id="tutText"></ul>
+        <div class="dots" id="tutDots"></div>
+        <div class="nav">
+          <button class="link" id="tutSkip" type="button">Überspringen</button>
+          <button class="go" id="tutNext" type="button">Weiter</button>
+        </div>
       </div>
     </div>
     <div class="overlay" id="overOv" hidden>
@@ -739,6 +778,7 @@ function gameOver() {
     const canEnter = qualifies(score);
     $('nameForm').hidden = !canEnter;
     renderBoards();
+    if (!$('tutOv').hidden) { tutResume = 'over'; return; }
     $('overOv').hidden = false;
     (canEnter ? $('nameInput') : $('againBtn')).focus({ preventScroll: true });
   });
@@ -969,7 +1009,73 @@ window.addEventListener('keydown', e => {
   else if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'Enter') { shoot(); e.preventDefault(); }
   aimX = Math.max(TABLE.l, Math.min(TABLE.r, aimX));
 });
-$('startBtn').addEventListener('click', newGame);
+// ---------- Anleitung (beim ersten Spiel) ----------
+let tutSeen = false;
+try { tutSeen = localStorage.getItem('schnitzi_tutorial') === '1'; } catch (e) {}
+// Wer schon gespielt hat (Rekord vorhanden), bekommt sie nicht ungefragt
+if (record > 0) tutSeen = true;
+const img = (i, cls = '') => `<img src="${icons[i]}" alt="" class="${cls}">`;
+const TUT = [
+  { t: 'Glas schieben',
+    pic: () => img(1) + '<span class="hand">👆</span>',
+    li: ['<b>Zieh</b> das Glas unten nach links oder rechts.',
+         '<b>Lass los</b>, dann rutscht es über die Theke nach oben.',
+         'Am Computer: <b>Pfeiltasten</b> und <b>Leertaste</b>.'] },
+  { t: 'Gleiche verschmelzen',
+    pic: () => img(0, 'sm') + '+' + img(0, 'sm') + '=' + img(1),
+    li: ['Treffen <b>zwei gleiche Drinks</b> aufeinander, werden sie zum nächstgrößeren.',
+         '<b>12 Stufen</b> bis zum Mega-Shake. Die Leiste unten zeigt deine Drinks.',
+         '<b>„Nächstes“</b> oben zeigt, was als Nächstes kommt.'] },
+  { t: 'Punkte und Combos',
+    pic: () => '<span class="tag">x2</span>' + img(2) + '<span class="tag">x3</span>',
+    li: ['Jedes Verschmelzen bringt Punkte, große Drinks mehr.',
+         '<b>Schnell hintereinander</b> verschmelzen gibt Combo-Bonus: x2, x3 …',
+         'Ein <b>gerader Treffer</b> schiebt das andere Glas weit weg.'] },
+  { t: 'Nicht überfüllen!',
+    pic: () => '<span class="line">' + img(4, 'sm') + '</span>',
+    li: ['Bleibt ein Drink auf der <b>gestrichelten Linie</b> unten liegen, läuft ein roter Kreis voll.',
+         'Ist er voll, ist <b>Feierabend</b>. Also Platz schaffen und Rekord knacken!'] },
+];
+let tutStep = 0, tutResume = null;
+function renderTut() {
+  const s = TUT[tutStep], last = tutStep === TUT.length - 1;
+  $('tutNo').textContent = 'Anleitung ' + (tutStep + 1) + ' / ' + TUT.length;
+  $('tutTitle').textContent = s.t;
+  $('tutPic').innerHTML = s.pic();
+  $('tutText').innerHTML = s.li.map(x => '<li>' + x + '</li>').join('');
+  $('tutDots').innerHTML = TUT.map((_, i) => '<i class="' + (i === tutStep ? 'on' : '') + '"></i>').join('');
+  $('tutNext').textContent = last ? (tutResume === 'play' ? 'Weiterspielen' : "Los geht's") : 'Weiter';
+  $('tutSkip').hidden = last;
+  $('tutNext').parentElement.style.justifyContent = last ? 'center' : '';
+}
+function openTut(resume) {
+  tutResume = resume; tutStep = 0;
+  if (state === 'play') { state = 'help'; aiming = false; }
+  $('startOv').hidden = true; $('overOv').hidden = true;
+  renderTut(); $('tutOv').hidden = false;
+  $('tutNext').focus({ preventScroll: true });
+}
+function closeTut() {
+  $('tutOv').hidden = true;
+  if (!tutSeen) { tutSeen = true; try { localStorage.setItem('schnitzi_tutorial', '1'); } catch (e) {} }
+  if (tutResume === 'play') { state = 'play'; last = performance.now(); }
+  else if (tutResume === 'over') { state = 'over'; $('overOv').hidden = false; $('againBtn').focus({ preventScroll: true }); }
+  else if (tutResume === 'start') { $('startOv').hidden = false; $('startBtn').focus({ preventScroll: true }); }
+  else newGame();
+}
+$('tutNext').addEventListener('click', () => { if (tutStep < TUT.length - 1) { tutStep++; renderTut(); } else closeTut(); });
+$('tutSkip').addEventListener('click', closeTut);
+$('tutOv').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeTut(); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft' && tutStep > 0) { tutStep--; renderTut(); e.preventDefault(); }
+  else if (e.key === 'ArrowRight' && tutStep < TUT.length - 1) { tutStep++; renderTut(); e.preventDefault(); }
+});
+$('helpBtn').addEventListener('click', () => {
+  if (!$('tutOv').hidden) return;
+  openTut(state === 'play' || state === 'help' ? 'play' : state === 'over' ? 'over' : 'start');
+});
+
+$('startBtn').addEventListener('click', () => { if (tutSeen) newGame(); else openTut('first'); });
 $('againBtn').addEventListener('click', newGame);
 $('nameForm').addEventListener('submit', e => {
   e.preventDefault();
