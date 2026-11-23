@@ -8,6 +8,7 @@ Ein kleines HTML5-Merge-Spiel: Schieb Drinks über die Theke. Treffen zwei gleic
 
 ## Regeln
 
+- Beim ersten Spiel erklärt eine kurze Anleitung (4 Schritte) alles Wichtige. Über das ?-Feld oben links lässt sie sich jederzeit wieder öffnen, das Spiel pausiert dabei.
 - Glas unten nach links/rechts ziehen und loslassen (oder Pfeiltasten + Leertaste).
 - Zwei gleiche Drinks ergeben den nächsten der 12 Stufen, vom Kirsch-Shot bis zum Schnitzis Mega-Shake.
 - Jeder Merge bringt Punkte, schnelle Folge-Merges geben einen Combo-Multiplikator.
